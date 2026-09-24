@@ -32,7 +32,8 @@ RENDERS_PER_DESCRIPTION = 2
 
 
 def call(model, content, modalities=None):
-    body = {"model": model, "messages": [{"role": "user", "content": content}]}
+    body = {"model": model, "messages": [{"role": "user", "content": content}],
+            "max_tokens": 4000}
     if modalities:
         body["modalities"] = modalities
     req = urllib.request.Request(
@@ -46,16 +47,17 @@ def call(model, content, modalities=None):
 
 
 def data_url(path):
-    return "data:image/jpeg;base64," + base64.b64encode(path.read_bytes()).decode()
+    mime = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
+    return f"data:{mime};base64," + base64.b64encode(path.read_bytes()).decode()
 
 
-def describe(image_path):
+def describe(image_path, feedback=""):
     prompt = (
         f"Describe this image in at most {WORD_CAP} words so that an illustrator who has "
         "never seen it could recreate it. Focus on what is visible: subject, pose, "
         "composition, colors, lighting, objects. Do NOT name the artwork, artist, museum, "
         "art movement, era, or say that it is famous. Output only the description."
-    )
+    ) + feedback
     msg = call(DESCRIBER, [{"type": "text", "text": prompt},
                            {"type": "image_url", "image_url": {"url": data_url(image_path)}}])
     return msg["content"].strip()
