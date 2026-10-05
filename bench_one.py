@@ -58,34 +58,51 @@ def judge_with(generated, description, metrics, note=""):
     return {"scores": scores, "mean": round(mean, 2)}
 
 
+def spent():
+    return getattr(e.thread_cost, "total", 0.0)
+
+
 def run_describer(model):
     d = OUT / model.replace("/", "_")
     d.mkdir(parents=True, exist_ok=True)
     res_path = d / "result.json"
     res = json.loads(res_path.read_text()) if res_path.exists() else {"describer": model}
+    costs = res.setdefault("cost_usd", {})  # actual spend per step, from OpenRouter
 
     if "description" not in res:
+        t = spent()
         res["description"] = e.describe(e.PAINTING["file"], model)
+        costs["description"] = round(spent() - t, 5)
         res_path.write_text(json.dumps(res, indent=2))
     desc = res["description"]
 
     if "image" not in res:
         img = d / "image.png"
         if not img.exists():
+            t = spent()
             e.render(IMAGE_MODEL, desc, img)
+            costs["image"] = round(spent() - t, 5)
+        t = spent()
         res["image"] = judge_with(img, desc, e.METRICS)
+        costs["judge_image"] = round(spent() - t, 5)
         res_path.write_text(json.dumps(res, indent=2))
 
     if "svg" not in res:
         png = d / "svg.png"
         if not png.exists():
+            t = spent()
             draw_svg(desc, d / "drawing.svg", png)
+            costs["svg"] = round(spent() - t, 5)
         note = ("\n(Image 2 is a simple vector drawing made from this text; judge content, "
                 "not rendering quality.)")
+        t = spent()
         res["svg"] = judge_with(png, desc, SVG_METRICS, note)
+        costs["judge_svg"] = round(spent() - t, 5)
         res_path.write_text(json.dumps(res, indent=2))
 
-    print(f"[{model}] image {res['image']['mean']}/10  svg {res['svg']['mean']}/10  "
+    costs["total"] = round(sum(v for k, v in costs.items() if k != "total"), 5)
+    res_path.write_text(json.dumps(res, indent=2))
+    print(f"[{model}] ${costs['total']:.3f}  image {res['image']['mean']}/10  svg {res['svg']['mean']}/10  "
           f"({len(desc.split())} words) {desc!r}", flush=True)
     return res
 
@@ -103,10 +120,10 @@ if __name__ == "__main__":
         except Exception as ex:  # one failing describer shouldn't sink the rest
             print(f"[{m}] FAILED: {ex}")
     rows = sorted(results.values(), key=lambda r: -(r["image"]["mean"] + r["svg"]["mean"]))
-    print("\nrank  describer                       image   svg   avg")
+    print("\nrank  describer                       image   svg   avg    cost")
     for i, r in enumerate(rows, 1):
         avg = (r["image"]["mean"] + r["svg"]["mean"]) / 2
         print(f"{i:>4}  {r['describer']:30s} {r['image']['mean']:5.1f} {r['svg']['mean']:5.1f} "
-              f"{avg:5.2f}")
+              f"{avg:5.2f}  ${r['cost_usd'].get('total', 0):.3f}")
     print(f"\ncost this run ${e.cost:.3f}")
     (OUT / "summary.json").write_text(json.dumps(rows, indent=2))

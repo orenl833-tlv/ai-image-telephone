@@ -10,6 +10,7 @@ import base64
 import json
 import os
 import sys
+import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -46,6 +47,9 @@ METRICS = {
 }
 
 cost = 0.0
+_lock = threading.Lock()
+# Per-thread running total, so parallel callers can attribute spend to their own work.
+thread_cost = threading.local()
 
 
 def call(model, content, **extra):
@@ -62,7 +66,9 @@ def call(model, content, **extra):
     except urllib.error.HTTPError as e:
         raise RuntimeError(f"{model}: HTTP {e.code}: {e.read().decode()[:500]}") from None
     c = resp.get("usage", {}).get("cost", 0) or 0
-    cost += c
+    with _lock:
+        cost += c
+    thread_cost.total = getattr(thread_cost, "total", 0.0) + c
     print(f"  [{model}] ${c:.4f}")
     return resp["choices"][0]["message"]
 
