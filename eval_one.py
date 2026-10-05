@@ -3,7 +3,8 @@
 A judge model sees both images and scores 8 fidelity metrics from 0 to 10.
 One cheap model describes the painting, each cheap image model renders that same
 description once, and a strong judge model grades every render against the original.
-Usage: OPENROUTER_API_KEY=... python3 eval_one.py [painting_id]
+Usage: OPENROUTER_API_KEY=... python3 eval_one.py [painting_id] [renderer ...]
+Re-running on a painting reuses its saved description and adds the new renderers' results.
 """
 import base64
 import json
@@ -28,7 +29,7 @@ GLOBAL_BANNED = ["painting by", "painted by", "baroque", "renaissance", "famous"
                  "masterpiece", "museum", "century"]
 
 DESCRIBER = "google/gemini-3.5-flash-lite"
-RENDERERS = ["google/gemini-3.1-flash-lite-image", "openai/gpt-5-image-mini"]
+RENDERERS = sys.argv[2:] or ["google/gemini-3.1-flash-lite-image", "openai/gpt-5-image-mini"]
 JUDGE = "anthropic/claude-opus-5.5"
 WORD_CAP = 40
 
@@ -139,11 +140,17 @@ def main():
     out = HERE / "out" / PAINTING["id"]
     out.mkdir(parents=True, exist_ok=True)
 
-    print("[describe]")
-    description = describe(PAINTING["file"])
-    print(f"  {len(description.split())} words: {description!r}")
+    log = out / "result.json"
+    prev = json.loads(log.read_text()) if log.exists() else {}
+    if "description" in prev:
+        description = prev["description"]
+        print(f"[describe] reusing saved description: {description!r}")
+    else:
+        print("[describe]")
+        description = describe(PAINTING["file"])
+        print(f"  {len(description.split())} words: {description!r}")
 
-    results = {}
+    results = prev.get("renders", {})
     for model in RENDERERS:
         print(f"[render] {model}")
         generated = out / f"render_{model.replace('/', '_')}.png"
@@ -159,9 +166,10 @@ def main():
         results[model] = {"image": generated.name, "scores": scores, "mean": mean}
 
     print(f"[done] total cost ${cost:.4f}")
-    (out / "result.json").write_text(json.dumps({
-        "describer": DESCRIBER, "judge": JUDGE, "word_cap": WORD_CAP,
-        "description": description, "renders": results, "cost_usd": cost,
+    log.write_text(json.dumps({
+        "describer": prev.get("describer", DESCRIBER), "judge": JUDGE, "word_cap": WORD_CAP,
+        "description": description, "renders": results,
+        "cost_usd": prev.get("cost_usd", 0) + cost,
     }, indent=2))
 
 
