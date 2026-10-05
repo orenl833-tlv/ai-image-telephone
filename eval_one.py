@@ -20,6 +20,7 @@ HERE = Path(__file__).parent
 PAINTINGS = {
     "las_meninas": ["meninas", "velazquez", "velázquez", "prado", "infanta", "margarita",
                     "philip", "spanish golden age"],
+    "raga_dipak": ["raga dipak", "ragamala", "jaipur", "art institute"],
     "smith_family": ["noah smith", "ezra ames", "art institute"],
     "pearl_earring": ["girl with a pearl", "vermeer", "mauritshuis", "delft", "dutch golden age"],
 }
@@ -85,7 +86,7 @@ def leak_problems(text):
     return problems
 
 
-def describe(path):
+def describe(path, model=None):
     prompt = (
         f"Describe this image in at most {WORD_CAP} words so an illustrator who has never seen "
         "it could recreate it as closely as possible: layout, figures, poses, faces, colors, "
@@ -93,8 +94,8 @@ def describe(path):
         "movement or era. Output only the description."
     )
     feedback = ""
-    for _ in range(4):
-        text = call(DESCRIBER, [{"type": "text", "text": prompt + feedback}, image_part(path)])
+    for _ in range(8):
+        text = call(model or DESCRIBER, [{"type": "text", "text": prompt + feedback}, image_part(path)])
         text = text["content"].strip()
         problems = leak_problems(text)
         if not problems:
@@ -114,14 +115,14 @@ def render(model, description, out_path):
     out_path.write_bytes(base64.b64decode(url.split(",", 1)[1]))
 
 
-def judge(original, generated, description):
-    rubric = "\n".join(f'- "{k}": {v}' for k, v in METRICS.items())
+def judge(original, generated, description, metrics=None, note=""):
+    rubric = "\n".join(f'- "{k}": {v}' for k, v in (metrics or METRICS).items())
     prompt = (
         "Image 1 is an original painting. Image 2 is an attempt to recreate it from a short "
         "text description. Score how closely image 2 matches image 1 on each metric, 0-10 "
         "(10 = indistinguishable, 5 = same idea with clear differences, 0 = unrelated). "
         "Be strict and judge only what is visible.\n\nMetrics:\n" + rubric +
-        "\n\nImage 2 was drawn from ONLY this text:\n" + repr(description) +
+        "\n\nImage 2 was drawn from ONLY this text:\n" + repr(description) + note +
         "\n\nAlso check for copying from memory: list specific details in image 2 that "
         "match image 1 but are NOT stated or clearly implied by the text (an image model that "
         "recognized the artwork would add these). Generic filler that happens to match does "
