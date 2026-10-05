@@ -1,27 +1,34 @@
 """Image -> text -> image, then score the generated image against the original.
 
 A judge model sees both images and scores 8 fidelity metrics from 0 to 10.
-Usage: OPENROUTER_API_KEY=... python3 eval_one.py
+Usage: OPENROUTER_API_KEY=... python3 eval_one.py [painting_id] [model]
+Passing a model uses it for all three steps (describe, render, judge).
 """
 import base64
 import json
 import os
-import re
+import sys
 import urllib.request
 from pathlib import Path
 
 API = "https://openrouter.ai/api/v1/chat/completions"
 HERE = Path(__file__).parent
 
-PAINTING = {"id": "las_meninas", "file": HERE / "paintings" / "las_meninas.jpg",
-            "banned": ["meninas", "velazquez", "velázquez", "prado", "infanta", "margarita",
-                       "philip", "spanish golden age"]}
+PAINTINGS = {
+    "las_meninas": ["meninas", "velazquez", "velázquez", "prado", "infanta", "margarita",
+                    "philip", "spanish golden age"],
+    "pearl_earring": ["pearl earring", "vermeer", "mauritshuis", "delft", "dutch golden age"],
+}
+_pid = sys.argv[1] if len(sys.argv) > 1 else "las_meninas"
+PAINTING = {"id": _pid, "file": HERE / "paintings" / f"{_pid}.jpg", "banned": PAINTINGS[_pid]}
 GLOBAL_BANNED = ["painting by", "painted by", "baroque", "renaissance", "famous",
                  "masterpiece", "museum", "century"]
 
 DESCRIBER = "google/gemini-3.5-flash-lite"
 RENDERER = "openai/gpt-5-image-mini"
 JUDGE = "openai/gpt-5.6-luna"
+if len(sys.argv) > 2:
+    DESCRIBER = RENDERER = JUDGE = sys.argv[2]
 WORD_CAP = 40
 
 METRICS = {
@@ -111,7 +118,7 @@ def judge(original, generated):
 
 
 def main():
-    out = HERE / "out" / PAINTING["id"]
+    out = HERE / "out" / PAINTING["id"] / RENDERER.replace("/", "_")
     out.mkdir(parents=True, exist_ok=True)
 
     print("[describe]")
