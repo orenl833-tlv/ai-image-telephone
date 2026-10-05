@@ -19,6 +19,7 @@ HERE = Path(__file__).parent
 PAINTINGS = {
     "las_meninas": ["meninas", "velazquez", "velázquez", "prado", "infanta", "margarita",
                     "philip", "spanish golden age"],
+    "smith_family": ["noah smith", "ezra ames", "art institute"],
     "pearl_earring": ["girl with a pearl", "vermeer", "mauritshuis", "delft", "dutch golden age"],
 }
 _pid = sys.argv[1] if len(sys.argv) > 1 else "las_meninas"
@@ -103,21 +104,30 @@ def describe(path):
 
 
 def render(model, description, out_path):
-    prompt = ("Create exactly one painting as a single image (no panels, borders or "
-              f"frames): {description}")
+    prompt = ("Create exactly one painting as a single image (no panels, borders or frames). "
+              "Draw only what the text says. Do not recreate or reference any existing "
+              "artwork; invent every detail the text does not specify.\n\n"
+              f"Text: {description}")
     msg = call(model, [{"type": "text", "text": prompt}], modalities=["image", "text"])
     url = msg["images"][0]["image_url"]["url"]
     out_path.write_bytes(base64.b64decode(url.split(",", 1)[1]))
 
 
-def judge(original, generated):
+def judge(original, generated, description):
     rubric = "\n".join(f'- "{k}": {v}' for k, v in METRICS.items())
     prompt = (
         "Image 1 is an original painting. Image 2 is an attempt to recreate it from a short "
         "text description. Score how closely image 2 matches image 1 on each metric, 0-10 "
         "(10 = indistinguishable, 5 = same idea with clear differences, 0 = unrelated). "
         "Be strict and judge only what is visible.\n\nMetrics:\n" + rubric +
-        '\n\nReply with JSON only: {"<metric>": {"score": <0-10>, "reason": "<one sentence>"}, ...}'
+        "\n\nImage 2 was drawn from ONLY this text:\n" + repr(description) +
+        "\n\nAlso check for copying from memory: list specific details in image 2 that "
+        "match image 1 but are NOT stated or clearly implied by the text (an image model that "
+        "recognized the artwork would add these). Generic filler that happens to match does "
+        "not count.\n\nReply with JSON only: "
+        '{"<metric>": {"score": <0-10>, "reason": "<one sentence>"}, ..., '
+        '"memory_copy": {"details": ["..."], "score": <0-10, 0 = nothing copied, '
+        '10 = clearly reproduced from memory>}}'
     )
     msg = call(JUDGE, [{"type": "text", "text": prompt}, image_part(original),
                        image_part(generated)])
@@ -140,11 +150,12 @@ def main():
         if not generated.exists():  # reuse a render from an interrupted run
             render(model, description, generated)
         print(f"[judge] {JUDGE}")
-        scores = judge(PAINTING["file"], generated)
+        scores = judge(PAINTING["file"], generated, description)
         for k in METRICS:
             print(f"  {k:19s} {scores[k]['score']:>2}/10  {scores[k]['reason']}")
         mean = sum(scores[k]["score"] for k in METRICS) / len(METRICS)
-        print(f"  mean {mean:.1f}/10")
+        mc = scores.get("memory_copy", {})
+        print(f"  mean {mean:.1f}/10   memory_copy {mc.get('score')}/10: {mc.get('details')}")
         results[model] = {"image": generated.name, "scores": scores, "mean": mean}
 
     print(f"[done] total cost ${cost:.4f}")
