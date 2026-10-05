@@ -1,13 +1,15 @@
 """Image -> text -> image, then score the generated image against the original.
 
 A judge model sees both images and scores 8 fidelity metrics from 0 to 10.
-Usage: OPENROUTER_API_KEY=... python3 eval_one.py [painting_id] [model]
-Passing a model uses it for all three steps (describe, render, judge).
+One cheap model describes the painting, each cheap image model renders that same
+description once, and a strong judge model grades every render against the original.
+Usage: OPENROUTER_API_KEY=... python3 eval_one.py [painting_id]
 """
 import base64
 import json
 import os
 import sys
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -17,7 +19,7 @@ HERE = Path(__file__).parent
 PAINTINGS = {
     "las_meninas": ["meninas", "velazquez", "velázquez", "prado", "infanta", "margarita",
                     "philip", "spanish golden age"],
-    "pearl_earring": ["pearl earring", "vermeer", "mauritshuis", "delft", "dutch golden age"],
+    "pearl_earring": ["girl with a pearl", "vermeer", "mauritshuis", "delft", "dutch golden age"],
 }
 _pid = sys.argv[1] if len(sys.argv) > 1 else "las_meninas"
 PAINTING = {"id": _pid, "file": HERE / "paintings" / f"{_pid}.jpg", "banned": PAINTINGS[_pid]}
@@ -25,10 +27,8 @@ GLOBAL_BANNED = ["painting by", "painted by", "baroque", "renaissance", "famous"
                  "masterpiece", "museum", "century"]
 
 DESCRIBER = "google/gemini-3.5-flash-lite"
-RENDERER = "openai/gpt-5-image-mini"
-JUDGE = "openai/gpt-5.6-luna"
-if len(sys.argv) > 2:
-    DESCRIBER = RENDERER = JUDGE = sys.argv[2]
+RENDERERS = ["google/gemini-3.1-flash-lite-image", "openai/gpt-5-image-mini"]
+JUDGE = "anthropic/claude-opus-5.5"
 WORD_CAP = 40
 
 METRICS = {
@@ -53,8 +53,11 @@ def call(model, content, **extra):
         API, data=json.dumps(body).encode(),
         headers={"Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}",
                  "Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=300) as r:
-        resp = json.load(r)
+    try:
+        with urllib.request.urlopen(req, timeout=300) as r:
+            resp = json.load(r)
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"{model}: HTTP {e.code}: {e.read().decode()[:500]}") from None
     c = resp.get("usage", {}).get("cost", 0) or 0
     cost += c
     print(f"  [{model}] ${c:.4f}")
@@ -62,8 +65,12 @@ def call(model, content, **extra):
 
 
 def image_part(path):
-    mime = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
-    url = f"data:{mime};base64," + base64.b64encode(path.read_bytes()).decode()
+    data = path.read_bytes()
+    # Trust the bytes, not the extension: some image models return JPEG for a .png name.
+    mime = "image/png" if data[:8] == b"\x89PNG\r\n\x1a\n" else "image/jpeg"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        mime = "image/webp"
+    url = f"data:{mime};base64," + base64.b64encode(data).decode()
     return {"type": "image_url", "image_url": {"url": url}}
 
 
@@ -95,9 +102,10 @@ def describe(path):
     raise RuntimeError("describer kept failing the leak check")
 
 
-def render(description, out_path):
-    msg = call(RENDERER, [{"type": "text", "text": f"Create a painting of: {description}"}],
-               modalities=["image", "text"])
+def render(model, description, out_path):
+    prompt = ("Create exactly one painting as a single image (no panels, borders or "
+              f"frames): {description}")
+    msg = call(model, [{"type": "text", "text": prompt}], modalities=["image", "text"])
     url = msg["images"][0]["image_url"]["url"]
     out_path.write_bytes(base64.b64decode(url.split(",", 1)[1]))
 
@@ -118,27 +126,31 @@ def judge(original, generated):
 
 
 def main():
-    out = HERE / "out" / PAINTING["id"] / RENDERER.replace("/", "_")
+    out = HERE / "out" / PAINTING["id"]
     out.mkdir(parents=True, exist_ok=True)
 
     print("[describe]")
     description = describe(PAINTING["file"])
     print(f"  {len(description.split())} words: {description!r}")
 
-    print("[render]")
-    generated = out / "render.png"
-    render(description, generated)
+    results = {}
+    for model in RENDERERS:
+        print(f"[render] {model}")
+        generated = out / f"render_{model.replace('/', '_')}.png"
+        if not generated.exists():  # reuse a render from an interrupted run
+            render(model, description, generated)
+        print(f"[judge] {JUDGE}")
+        scores = judge(PAINTING["file"], generated)
+        for k in METRICS:
+            print(f"  {k:19s} {scores[k]['score']:>2}/10  {scores[k]['reason']}")
+        mean = sum(scores[k]["score"] for k in METRICS) / len(METRICS)
+        print(f"  mean {mean:.1f}/10")
+        results[model] = {"image": generated.name, "scores": scores, "mean": mean}
 
-    print("[judge]")
-    scores = judge(PAINTING["file"], generated)
-    for k in METRICS:
-        print(f"  {k:19s} {scores[k]['score']:>2}/10  {scores[k]['reason']}")
-    mean = sum(scores[k]["score"] for k in METRICS) / len(METRICS)
-    print(f"[done] mean {mean:.1f}/10, total cost ${cost:.4f}")
-
+    print(f"[done] total cost ${cost:.4f}")
     (out / "result.json").write_text(json.dumps({
-        "describer": DESCRIBER, "renderer": RENDERER, "judge": JUDGE, "word_cap": WORD_CAP,
-        "description": description, "scores": scores, "mean": mean, "cost_usd": cost,
+        "describer": DESCRIBER, "judge": JUDGE, "word_cap": WORD_CAP,
+        "description": description, "renders": results, "cost_usd": cost,
     }, indent=2))
 
 
