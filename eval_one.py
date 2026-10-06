@@ -33,7 +33,7 @@ GLOBAL_BANNED = ["painting by", "painted by", "baroque", "renaissance", "famous"
 
 DESCRIBER = "google/gemini-3.5-flash-lite"
 RENDERERS = sys.argv[2:] or ["google/gemini-3.1-flash-lite-image", "openai/gpt-5-image-mini"]
-JUDGE = "anthropic/claude-opus-5.5"
+JUDGE = "anthropic/claude-fable-5.1"
 WORD_CAP = 40
 
 METRICS = {
@@ -122,21 +122,34 @@ def render(model, description, out_path):
     out_path.write_bytes(base64.b64decode(url.split(",", 1)[1]))
 
 
-def judge(original, generated, description, metrics=None, note=""):
-    rubric = "\n".join(f'- "{k}": {v}' for k, v in (metrics or METRICS).items())
+def judge(original, generated, metrics=None, note=""):
+    """Grade image 2 against image 1. The judge sees only the two images, never the
+    description, so it can't recognize (and favor) a describer's writing style."""
+    metrics = metrics or METRICS
+    rubric = "\n".join(f'- "{k}": {v}' for k, v in metrics.items())
     prompt = (
-        "Image 1 is an original painting. Image 2 is an attempt to recreate it from a short "
-        "text description. Score how closely image 2 matches image 1 on each metric, 0-10 "
-        "(10 = indistinguishable, 5 = same idea with clear differences, 0 = unrelated). "
-        "Be strict and judge only what is visible.\n\nMetrics:\n" + rubric +
-        "\n\nImage 2 was drawn from ONLY this text:\n" + repr(description) + note +
-        "\n\nAlso check for copying from memory: list specific details in image 2 that "
-        "match image 1 but are NOT stated or clearly implied by the text (an image model that "
-        "recognized the artwork would add these). Generic filler that happens to match does "
-        "not count.\n\nReply with JSON only: "
-        '{"<metric>": {"score": <0-10>, "reason": "<one sentence>"}, ..., '
-        '"memory_copy": {"details": ["..."], "score": <0-10, 0 = nothing copied, '
-        '10 = clearly reproduced from memory>}}'
+        "Image 1 is an original painting. Image 2 is an attempt to recreate it. Score how "
+        "closely image 2 matches image 1 on each metric, 0-10 (10 = indistinguishable, "
+        "5 = same idea with clear differences, 0 = unrelated). Be strict and judge only what "
+        "is visible." + note + "\n\nMetrics:\n" + rubric +
+        '\n\nReply with JSON only: {"<metric>": {"score": <0-10>, "reason": "<one sentence>"}, ...}'
+    )
+    msg = call(JUDGE, [{"type": "text", "text": prompt}, image_part(original),
+                       image_part(generated)])
+    raw = msg["content"]
+    return json.loads(raw[raw.index("{"): raw.rindex("}") + 1])
+
+
+def memory_check(original, generated, description):
+    """Separate from grading: did the image model add details of the original that the
+    text never gave it (i.e. did it recognize the artwork)? Not part of the score."""
+    prompt = (
+        "Image 1 is an original painting. Image 2 was drawn by an image model from ONLY this "
+        "text:\n" + repr(description) + "\n\nList specific details in image 2 that match "
+        "image 1 but are NOT stated or clearly implied by the text. Ignore generic details "
+        "typical of the period or style. Reply with JSON only: "
+        '{"details": ["..."], "score": <0-10, 0 = nothing copied, 10 = clearly reproduced '
+        'from memory>}'
     )
     msg = call(JUDGE, [{"type": "text", "text": prompt}, image_part(original),
                        image_part(generated)])
@@ -165,7 +178,8 @@ def main():
         if not generated.exists():  # reuse a render from an interrupted run
             render(model, description, generated)
         print(f"[judge] {JUDGE}")
-        scores = judge(PAINTING["file"], generated, description)
+        scores = judge(PAINTING["file"], generated)
+        scores["memory_copy"] = memory_check(PAINTING["file"], generated, description)
         for k in METRICS:
             print(f"  {k:19s} {scores[k]['score']:>2}/10  {scores[k]['reason']}")
         mean = sum(scores[k]["score"] for k in METRICS) / len(METRICS)

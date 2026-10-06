@@ -54,7 +54,8 @@ def draw_svg(description, svg_path, png_path):
 
 
 def judge_with(generated, description, metrics, note=""):
-    scores = e.judge(e.PAINTING["file"], generated, description, metrics, note)
+    scores = e.judge(e.PAINTING["file"], generated, metrics, note)
+    scores["memory_copy"] = e.memory_check(e.PAINTING["file"], generated, description)
     mean = sum(scores[k]["score"] for k in metrics) / len(metrics)
     return {"scores": scores, "mean": round(mean, 2)}
 
@@ -94,8 +95,7 @@ def run_describer(model):
             t = spent()
             draw_svg(desc, d / "drawing.svg", png)
             costs["svg"] = round(spent() - t, 5)
-        note = ("\n(Image 2 is a simple vector drawing made from this text; judge content, "
-                "not rendering quality.)")
+        note = (" Image 2 is a simple vector drawing; judge content, not rendering quality.")
         t = spent()
         res["svg"] = judge_with(png, desc, SVG_METRICS, note)
         costs["judge_svg"] = round(spent() - t, 5)
