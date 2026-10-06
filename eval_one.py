@@ -42,6 +42,7 @@ DESCRIBER = "google/gemini-3.5-flash-lite"
 RENDERERS = sys.argv[2:] or ["google/gemini-3.1-flash-lite-image", "openai/gpt-5-image-mini"]
 JUDGE = "anthropic/claude-opus-5.5"
 WORD_CAP = 40
+MIN_WORDS = 15
 
 METRICS = {
     "composition": "overall layout: where the main masses sit, framing, aspect ratio",
@@ -97,6 +98,8 @@ def leak_problems(text):
     words = len(text.split())
     if words > WORD_CAP:
         problems.append(f"{words} words > cap {WORD_CAP}")
+    if words < MIN_WORDS:  # catches cut-off replies like "Naive painting of two"
+        problems.append(f"only {words} words; looks cut off (minimum {MIN_WORDS})")
     return problems
 
 
