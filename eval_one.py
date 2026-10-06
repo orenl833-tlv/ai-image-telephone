@@ -21,6 +21,8 @@ HERE = Path(__file__).parent
 PAINTINGS = {
     "las_meninas": ["meninas", "velazquez", "velázquez", "prado", "infanta", "margarita",
                     "philip", "spanish golden age"],
+    "fight_club": ["fight club", "tyler", "durden", "marla", "fincher", "narrator", "pitt",
+                   "norton", "bonham carter", "movie", "film", "scene"],
     "phaeton": ["phaeton", "phoebus", "verona", "art institute"],
     "fox_river": ["fox river", "illinois", "art institute"],
     "heraclius": ["heraclius", "jerusalem", "art institute"],
@@ -34,7 +36,9 @@ PAINTINGS = {
     "pearl_earring": ["girl with a pearl", "vermeer", "mauritshuis", "delft", "dutch golden age"],
 }
 _pid = sys.argv[1] if len(sys.argv) > 1 else "las_meninas"
-PAINTING = {"id": _pid, "file": HERE / "paintings" / f"{_pid}.jpg", "banned": PAINTINGS[_pid]}
+_file = next((HERE / "paintings" / f"{_pid}{ext}" for ext in (".jpg", ".png")
+              if (HERE / "paintings" / f"{_pid}{ext}").exists()), HERE / "paintings" / f"{_pid}.jpg")
+PAINTING = {"id": _pid, "file": _file, "banned": PAINTINGS[_pid]}
 GLOBAL_BANNED = ["painting by", "painted by", "baroque", "renaissance", "famous",
                  "masterpiece", "museum", "century"]
 
