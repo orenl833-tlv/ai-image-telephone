@@ -21,6 +21,13 @@ HERE = Path(__file__).parent
 PAINTINGS = {
     "las_meninas": ["meninas", "velazquez", "velázquez", "prado", "infanta", "margarita",
                     "philip", "spanish golden age"],
+    "phaeton": ["phaeton", "phoebus", "verona", "art institute"],
+    "fox_river": ["fox river", "illinois", "art institute"],
+    "heraclius": ["heraclius", "jerusalem", "art institute"],
+    "circassian_cavalry": ["circassian", "pasini", "art institute"],
+    "resting": ["mancini", "art institute"],
+    "interior_1600s": ["seventeenth-century interior", "dyer", "art institute"],
+    "haywood_portrait": ["haywood", "william matthew prior", "art institute"],
     "hallett_boy": ["hallett", "art institute"],
     "raga_dipak": ["raga dipak", "ragamala", "jaipur", "art institute"],
     "smith_family": ["noah smith", "ezra ames", "art institute"],
