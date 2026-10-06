@@ -21,6 +21,7 @@ HERE = Path(__file__).parent
 PAINTINGS = {
     "las_meninas": ["meninas", "velazquez", "velázquez", "prado", "infanta", "margarita",
                     "philip", "spanish golden age"],
+    "hallett_boy": ["hallett", "art institute"],
     "raga_dipak": ["raga dipak", "ragamala", "jaipur", "art institute"],
     "smith_family": ["noah smith", "ezra ames", "art institute"],
     "pearl_earring": ["girl with a pearl", "vermeer", "mauritshuis", "delft", "dutch golden age"],

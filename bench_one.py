@@ -6,7 +6,7 @@ For each describer: write a description (word cap, leak check), then
 and a strong judge grades both against the original.
 Finished steps are cached under out/<painting>/bench/, so re-runs only do what's missing.
 
-Usage: OPENROUTER_API_KEY=... python3 bench_one.py <painting_id>
+Usage: OPENROUTER_API_KEY=... python3 bench_one.py <painting_id> [--image-only]
 """
 import json
 import re
@@ -16,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 # eval_one reads the painting id from argv at import time.
 PAINTING_ID = sys.argv[1]
+IMAGE_ONLY = "--image-only" in sys.argv
 sys.argv = sys.argv[:2]
 import eval_one as e  # noqa: E402
 
@@ -87,7 +88,7 @@ def run_describer(model):
         costs["judge_image"] = round(spent() - t, 5)
         res_path.write_text(json.dumps(res, indent=2))
 
-    if "svg" not in res:
+    if "svg" not in res and not IMAGE_ONLY:
         png = d / "svg.png"
         if not png.exists():
             t = spent()
@@ -102,7 +103,7 @@ def run_describer(model):
 
     costs["total"] = round(sum(v for k, v in costs.items() if k != "total"), 5)
     res_path.write_text(json.dumps(res, indent=2))
-    print(f"[{model}] ${costs['total']:.3f}  image {res['image']['mean']}/10  svg {res['svg']['mean']}/10  "
+    print(f"[{model}] ${costs['total']:.3f}  image {res['image']['mean']}/10  svg {res.get('svg', {}).get('mean', '-')}/10  "
           f"({len(desc.split())} words) {desc!r}", flush=True)
     return res
 
@@ -119,11 +120,15 @@ if __name__ == "__main__":
             results[m] = f.result()
         except Exception as ex:  # one failing describer shouldn't sink the rest
             print(f"[{m}] FAILED: {ex}")
-    rows = sorted(results.values(), key=lambda r: -(r["image"]["mean"] + r["svg"]["mean"]))
+    def avg(r):
+        means = [r[t]["mean"] for t in ("image", "svg") if t in r]
+        return sum(means) / len(means)
+
+    rows = sorted(results.values(), key=lambda r: -avg(r))
     print("\nrank  describer                       image   svg   avg    cost")
     for i, r in enumerate(rows, 1):
-        avg = (r["image"]["mean"] + r["svg"]["mean"]) / 2
-        print(f"{i:>4}  {r['describer']:30s} {r['image']['mean']:5.1f} {r['svg']['mean']:5.1f} "
-              f"{avg:5.2f}  ${r['cost_usd'].get('total', 0):.3f}")
+        svg = f"{r['svg']['mean']:5.1f}" if "svg" in r else "    -"
+        print(f"{i:>4}  {r['describer']:30s} {r['image']['mean']:5.1f} {svg} "
+              f"{avg(r):5.2f}  ${r['cost_usd'].get('total', 0):.3f}")
     print(f"\ncost this run ${e.cost:.3f}")
     (OUT / "summary.json").write_text(json.dumps(rows, indent=2))
