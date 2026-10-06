@@ -107,12 +107,22 @@ def leak_problems(text):
     return problems
 
 
-def describe(path, model=None):
+INFORMED_RUBRIC = (
+    " The recreation will be compared with the original on eight equally weighted criteria: "
+    "composition (layout, framing, aspect ratio), color palette, lighting, figures (number "
+    "and arrangement), poses and gestures, facial expressions and gaze, setting and objects, "
+    "and style/medium. State the image's orientation (portrait, landscape or square)."
+)
+
+
+def describe(path, model=None, informed=False):
+    """informed=True also tells the describer how the recreation will be graded."""
     prompt = (
         f"Describe this image in at most {WORD_CAP} words so an illustrator who has never seen "
         "it could recreate it as closely as possible: layout, figures, poses, faces, colors, "
-        "lighting, setting, style. Do NOT name the artwork, artist, people, museum, art "
-        "movement or era. Output only the description."
+        "lighting, setting, style." + (INFORMED_RUBRIC if informed else "") +
+        " Do NOT name the artwork, artist, people, museum, art movement or era. "
+        "Output only the description."
     )
     feedback = ""
     for _ in range(8):

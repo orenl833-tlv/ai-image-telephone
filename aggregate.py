@@ -22,12 +22,12 @@ def describers():
     return re.findall(r'"([^"]+)"', block)
 
 
-def main(paintings):
+def main(paintings, bench="bench"):
     DESCRIBERS = describers()
     data = {d: {} for d in DESCRIBERS}
     for p in paintings:
         for d in DESCRIBERS:
-            f = HERE / "out" / p / "bench" / d.replace("/", "_") / "result.json"
+            f = HERE / "out" / p / bench / d.replace("/", "_") / "result.json"
             if f.exists():
                 r = json.loads(f.read_text())
                 if "image" in r:
@@ -71,4 +71,6 @@ def main(paintings):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    args = sys.argv[1:]
+    informed = "--informed" in args
+    main([a for a in args if a != "--informed"], "bench_informed" if informed else "bench")

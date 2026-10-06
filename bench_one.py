@@ -6,7 +6,8 @@ For each describer: write a description (word cap, leak check), then
 and a strong judge grades both against the original.
 Finished steps are cached under out/<painting>/bench/, so re-runs only do what's missing.
 
-Usage: OPENROUTER_API_KEY=... python3 bench_one.py <painting_id> [--image-only]
+Usage: OPENROUTER_API_KEY=... python3 bench_one.py <painting_id> [--image-only] [--informed]
+--informed tells describers the grading criteria; results go to out/<painting>/bench_informed/.
 """
 import json
 import re
@@ -17,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 # eval_one reads the painting id from argv at import time.
 PAINTING_ID = sys.argv[1]
 IMAGE_ONLY = "--image-only" in sys.argv
+INFORMED = "--informed" in sys.argv
 sys.argv = sys.argv[:2]
 import eval_one as e  # noqa: E402
 
@@ -72,7 +74,7 @@ def run_describer(model):
 
     if "description" not in res:
         t = spent()
-        res["description"] = e.describe(e.PAINTING["file"], model)
+        res["description"] = e.describe(e.PAINTING["file"], model, INFORMED)
         costs["description"] = round(spent() - t, 5)
         res_path.write_text(json.dumps(res, indent=2))
     desc = res["description"]
@@ -107,7 +109,7 @@ def run_describer(model):
     return res
 
 
-OUT = e.HERE / "out" / PAINTING_ID / "bench"
+OUT = e.HERE / "out" / PAINTING_ID / ("bench_informed" if INFORMED else "bench")
 
 if __name__ == "__main__":
     OUT.mkdir(parents=True, exist_ok=True)
