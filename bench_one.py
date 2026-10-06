@@ -21,7 +21,6 @@ sys.argv = sys.argv[:2]
 import eval_one as e  # noqa: E402
 
 DESCRIBERS = [
-    "anthropic/claude-opus-5.5",
     "openai/gpt-5.6-sol",
     "openai/gpt-5.6-luna",
     "google/gemini-3.8-flash",

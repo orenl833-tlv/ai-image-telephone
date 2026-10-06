@@ -33,7 +33,7 @@ GLOBAL_BANNED = ["painting by", "painted by", "baroque", "renaissance", "famous"
 
 DESCRIBER = "google/gemini-3.5-flash-lite"
 RENDERERS = sys.argv[2:] or ["google/gemini-3.1-flash-lite-image", "openai/gpt-5-image-mini"]
-JUDGE = "anthropic/claude-fable-5.1"
+JUDGE = "anthropic/claude-opus-5.5"
 WORD_CAP = 40
 
 METRICS = {
