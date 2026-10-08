@@ -22,3 +22,6 @@ Stack: Python, REST APIs, parallel processing, Prompt Engineering, Claude Code
 אני בתחילת הדרך כ-Fullstack Developer ואשמח לשמוע על משרות entry level 🙌
 
 #AI #LLM #GenerativeAI #Python #FullStack #PromptEngineering #OpenToWork #JuniorDeveloper
+
+
+<!-- Attach image: linkedin_grades.png -->
