@@ -24,4 +24,4 @@ Stack: Python, REST APIs, parallel processing, Prompt Engineering, Claude Code
 #AI #LLM #GenerativeAI #Python #FullStack #PromptEngineering #OpenToWork #JuniorDeveloper
 
 
-<!-- Attach image: linkedin_grades.png -->
+<!-- Attach images: linkedin_metrics.png (per-metric grades), linkedin_grades.png (with vs without the grading criteria) -->
