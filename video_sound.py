@@ -1,0 +1,248 @@
+"""Movie-clip benchmark with sound: clip -> frames + audio notes -> description ->
+generated clip (with audio) -> grade on picture and sound.
+
+Picture: every describer and the judge see the same labeled 6-frame grid (video_pilot).
+Sound: an audio model turns each soundtrack (original and generated) into the same kind
+of notes - timestamped transcript, music, sound effects - so describers and the judge,
+who can't hear, all work from text. The judge writes its account of the original once
+and grades every recreation against it.
+
+Usage: OPENROUTER_API_KEY=... python3 video_sound.py <film.mp4> <start_s> <duration_s> <clip_id>
+"""
+import base64
+import itertools
+import json
+import sys
+from pathlib import Path
+
+ARGS = sys.argv[1:]
+import video_pilot as vp  # noqa: E402  (frame grids, crop, ffmpeg helpers; imports eval_one)
+
+e = vp.e
+DESCRIBERS = ["x-ai/grok-4.7", "google/gemini-3.8-flash"]
+VIDEO_MODELS = {  # model -> aspect ratios it accepts
+    "x-ai/grok-imagine-video-1.5-lite": ["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "2:3"],
+    "bytedance/seedance-2.0-mini": ["1:1", "3:4", "9:16", "4:3", "16:9", "21:9", "9:21"],
+    "alibaba/wan-3.0": ["16:9", "4:3", "1:1", "3:4", "9:16"],
+}
+AUDIO_MODEL = "google/gemini-3.8-flash"
+JUDGE = "anthropic/claude-opus-5.5"
+WORD_CAP, SOUND_CAP, MIN_WORDS = 85, 25, 30
+# Never allowed in a description: the film's title, cast and character names.
+BANNED = ["six-gun rhythm", "six gun rhythm", "tex fletcher", "fletcher", "joan barclay",
+          "ralph peters", "jim davis"]
+
+METRICS = dict(vp.METRICS)
+METRICS.update({
+    "speech": "what is said (content), by what kind of voice (man/woman, tone)",
+    "music": "presence, genre, tempo, mood and instruments of any music",
+    "sound_effects": "non-speech sounds: hooves, wind, doors, gunshots...",
+    "sync": "sounds and speech line up with the picture (lips move when someone talks, "
+            "sounds match visible actions)",
+})
+
+
+def audio_notes(video, cache):
+    """Soundtrack -> timestamped text notes, via a model that can hear."""
+    if cache.exists():
+        return cache.read_text()
+    wav = cache.with_suffix(".wav")
+    vp.ff("-i", str(video), "-vn", "-ac", "1", "-ar", "16000", str(wav))
+    data = base64.b64encode(wav.read_bytes()).decode()
+    prompt = (
+        "Listen to this short soundtrack and write notes for someone who cannot hear it. "
+        "1) Speech: transcribe every line with its start time in seconds and the kind of "
+        "voice (man/woman, approximate age, tone). Write 'none' if there is no speech. "
+        "2) Music: genre, tempo, mood, instruments, singing; or 'none'. "
+        "3) Sound effects: each sound with its time; or 'none'. "
+        "4) If the track is silent, say 'silent'. Do not name or guess any film, song, "
+        "performer or character. Plain text, at most 120 words."
+    )
+    text = e.call(AUDIO_MODEL, [{"type": "text", "text": prompt},
+                                {"type": "input_audio",
+                                 "input_audio": {"data": data, "format": "wav"}}]
+                  )["content"].strip()
+    wav.unlink()
+    cache.write_text(text)
+    return text
+
+
+def check(text):
+    words = len(text.split())
+    lower = text.lower()
+    problems = [f"banned term {b!r}" for b in BANNED if b in lower]
+    if words > WORD_CAP:
+        problems.append(f"{words} words > cap {WORD_CAP}")
+    if words < MIN_WORDS:
+        problems.append(f"only {words} words")
+    if "sound:" not in lower:
+        problems.append("missing the 'Sound:' part")
+    else:
+        sound = lower.split("sound:", 1)[1]
+        if len(sound.split()) > SOUND_CAP:
+            problems.append(f"Sound part has {len(sound.split())} words > {SOUND_CAP}")
+    return problems
+
+
+def describe(model, grid, notes, duration):
+    prompt = (
+        f"These are {vp.N_FRAMES} frames from a {duration:.0f}-second movie clip, in time order "
+        "left to right, top row then bottom row; each is labeled with its number and time. "
+        "Below the image are notes on the clip's soundtrack.\n\n"
+        f"Soundtrack notes:\n{notes}\n\n"
+        f"Describe the clip in at most {WORD_CAP} words so a video maker who never saw or "
+        "heard it could recreate it as closely as possible. Write the picture first, then a "
+        f"final part starting with 'Sound:' of at most {SOUND_CAP} words (dialogue, voices, "
+        "music, effects). It will be compared with the original on: composition, color, "
+        "lighting, figures, setting, style of the footage, the action, movement and camera "
+        "motion, order of events, speech, music, sound effects and sync. State the "
+        "orientation. Do NOT name the film, actors, characters, songs or performers. Output "
+        "only the description."
+    )
+    feedback = ""
+    for _ in range(8):
+        text = e.call(model, [{"type": "text", "text": prompt + feedback},
+                              e.image_part(grid)])["content"].strip()
+        problems = check(text)
+        if not problems:
+            return text
+        print(f"  [{model}] rejected: {'; '.join(problems)}")
+        feedback = f"\n\nPrevious attempt rejected ({'; '.join(problems)}): {text!r}. Fix it."
+    raise RuntimeError(f"{model} kept failing the checks")
+
+
+def _generate(model, prompt, duration, aspect, out_mp4, extra):
+    import time
+    import urllib.request
+    key = e.os.environ["OPENROUTER_API_KEY"]
+    hdr = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+
+    def req(url, body=None):
+        r = urllib.request.Request(url, data=json.dumps(body).encode() if body else None,
+                                   headers=hdr, method="POST" if body else "GET")
+        try:
+            with urllib.request.urlopen(r, timeout=120) as resp:
+                return resp.read()
+        except urllib.error.HTTPError as err:
+            raise RuntimeError(f"{model}: HTTP {err.code}: {err.read().decode()[:400]}") from None
+
+    job = json.loads(req("https://openrouter.ai/api/v1/videos", {
+        "model": model, "prompt": prompt, "duration": int(round(duration)),
+        "resolution": "480p", "aspect_ratio": aspect, **extra}))
+    while True:
+        time.sleep(15)
+        st = json.loads(req(job["polling_url"]))
+        if st["status"] == "completed":
+            break
+        if st["status"] in ("failed", "cancelled", "expired"):
+            raise RuntimeError(f"{model} job {st['status']}: {st.get('error')}")
+    out_mp4.write_bytes(req(f"https://openrouter.ai/api/v1/videos/{job['id']}/content?index=0"))
+    c = (st.get("usage") or {}).get("cost") or 0
+    with e._lock:
+        e.cost += c
+    return c
+
+
+def original_account(out, grid, notes):
+    cache = out / "original_account.txt"
+    if cache.exists():
+        return cache.read_text()
+    prompt = (
+        f"These are {vp.N_FRAMES} frames of a movie clip (left to right, top row then bottom "
+        "row, each labeled with number and time), followed by notes on its soundtrack.\n\n"
+        f"Soundtrack notes:\n{notes}\n\nIn 4-5 sentences write down what happens: "
+        f"{vp.EVENTS_INSTRUCTIONS}; and what is heard and when. Output only the account."
+    )
+    text = e.call(JUDGE, [{"type": "text", "text": prompt}, e.image_part(grid)]
+                  )["content"].strip()
+    cache.write_text(text)
+    return text
+
+
+def judge(orig_grid, account, gen_grid, gen_notes):
+    rubric = "\n".join(f'- "{k}": {v}' for k, v in METRICS.items())
+    prompt = (
+        f"Image 1 shows {vp.N_FRAMES} frames of an original movie clip; image 2 shows "
+        f"{vp.N_FRAMES} frames, at the same relative times, of an attempt to recreate it from "
+        "a short text description. Frames run left to right, top row then bottom row, each "
+        "labeled with number and time.\n\n"
+        f"What happens in the original, picture and sound (treat as correct): {account}\n\n"
+        f"Notes on the recreation's soundtrack: {gen_notes}\n\n"
+        f"First write down what happens in the recreation: {vp.EVENTS_INSTRUCTIONS}; and what "
+        "is heard. Then score how closely the recreation matches the original on each "
+        "metric, 0-10 (10 = indistinguishable, 5 = same idea with clear differences, 0 = "
+        "unrelated or missing). Judge timing loosely but order of events strictly. For sync, "
+        "use the frames and the timestamps in the notes. Be strict.\n\nMetrics:\n" + rubric +
+        '\n\nReply with JSON only: {"recreation_events": "<2-3 sentences>", '
+        '"<metric>": {"score": <0-10>, "reason": "<one sentence>"}, ...}'
+    )
+    raw = e.call(JUDGE, [{"type": "text", "text": prompt}, e.image_part(orig_grid),
+                         e.image_part(gen_grid)])["content"]
+    return json.loads(raw[raw.index("{"): raw.rindex("}") + 1])
+
+
+def main():
+    src, start, duration, clip_id = Path(ARGS[0]), float(ARGS[1]), float(ARGS[2]), ARGS[3]
+    out = e.HERE / "out" / "video_sound" / clip_id
+    out.mkdir(parents=True, exist_ok=True)
+    clip = out / "original.mp4"
+    if not clip.exists():
+        crop = vp.detect_crop(src, start, duration)
+        vp.ff("-ss", str(start), "-t", str(duration), "-i", str(src),
+              *(["-vf", f"crop={crop}"] if crop else []), "-c:v", "libx264",
+              "-pix_fmt", "yuv420p", "-c:a", "aac", str(clip))
+    _, w, h = vp.probe(clip)
+    grid = out / "original_grid.png"
+    vp.frame_grid(clip, grid)
+    notes = audio_notes(clip, out / "original_audio.txt")
+    account = original_account(out, grid, notes)
+    print(f"original {w}x{h}\nAUDIO NOTES: {notes}\nJUDGE ACCOUNT: {account}\n")
+
+    descriptions = {}
+    for m in DESCRIBERS:
+        f = out / f"desc_{m.replace('/', '_')}.txt"
+        if not f.exists():
+            t = e.cost
+            f.write_text(describe(m, grid, notes, duration))
+            (out / f"desc_{m.replace('/', '_')}.cost").write_text(str(e.cost - t))
+        descriptions[m] = f.read_text()
+        print(f"[{m}] {descriptions[m]}\n")
+
+    results = []
+    for m, vm in itertools.product(DESCRIBERS, VIDEO_MODELS):
+        d = out / f"{m.replace('/', '_')}__{vm.replace('/', '_')}"
+        d.mkdir(exist_ok=True)
+        rp = d / "result.json"
+        if rp.exists():
+            results.append(json.loads(rp.read_text()))
+            continue
+        aspect = min(VIDEO_MODELS[vm], key=lambda a: abs(int(a.split(":")[0]) / int(a.split(":")[1]) - w / h))
+        r = {"describer": m, "video_model": vm, "aspect": aspect, "cost_usd": {}}
+        try:
+            r["cost_usd"]["video"] = round(_generate(vm, descriptions[m], duration, aspect,
+                                                     d / "video.mp4", {"generate_audio": True}), 4)
+        except RuntimeError as err:
+            print(f"  FAILED {vm}: {err}")
+            r["error"] = str(err)
+            rp.write_text(json.dumps(r, indent=2))
+            results.append(r)
+            continue
+        vp.frame_grid(d / "video.mp4", d / "grid.png")
+        t = e.cost
+        r["audio_notes"] = audio_notes(d / "video.mp4", d / "audio.txt")
+        r["scores"] = judge(grid, account, d / "grid.png", r["audio_notes"])
+        r["cost_usd"]["notes_and_judge"] = round(e.cost - t, 4)
+        r["mean_picture"] = round(sum(r["scores"][k]["score"] for k in vp.METRICS) / len(vp.METRICS), 2)
+        snd = ["speech", "music", "sound_effects", "sync"]
+        r["mean_sound"] = round(sum(r["scores"][k]["score"] for k in snd) / len(snd), 2)
+        r["mean"] = round(sum(r["scores"][k]["score"] for k in METRICS) / len(METRICS), 2)
+        rp.write_text(json.dumps(r, indent=2))
+        results.append(r)
+        print(f"  {m} x {vm}: picture {r['mean_picture']} sound {r['mean_sound']} "
+              f"all {r['mean']}  ${r['cost_usd']}")
+    (out / "summary.json").write_text(json.dumps(results, indent=2))
+    print(f"\ntotal cost this run ${e.cost:.3f}")
+
+
+if __name__ == "__main__":
+    main()
