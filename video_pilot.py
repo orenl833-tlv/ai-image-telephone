@@ -79,7 +79,7 @@ def nearest_aspect(w, h):
 
 
 def frame_grid(video, out_png):
-    """N_FRAMES frames at the same relative times in any clip, tiled 3x2 in time order,
+    """N_FRAMES frames at the same relative times in any clip, tiled in time order (3x2 for 6),
     each labeled with its frame number and time so the order can't be misread."""
     duration, _, _ = probe(video)
     times = [(i + 0.5) * duration / N_FRAMES for i in range(N_FRAMES)]
@@ -91,7 +91,9 @@ def frame_grid(video, out_png):
         f.unlink()
     tw, th = tiles[0][0].size
     pad = 4
-    grid = Image.new("RGB", (3 * tw + 2 * pad, 2 * th + pad), "black")
+    cols = 3 if N_FRAMES <= 6 else 4
+    rows = -(-N_FRAMES // cols)
+    grid = Image.new("RGB", (cols * tw + (cols - 1) * pad, rows * th + (rows - 1) * pad), "black")
     font = ImageFont.truetype(FONT, 18)
     for i, (img, t) in enumerate(tiles):
         img = img.resize((tw, th))
@@ -100,7 +102,7 @@ def frame_grid(video, out_png):
         x1, y1, x2, y2 = d.textbbox((8, 6), label, font=font)
         d.rectangle((x1 - 4, y1 - 3, x2 + 4, y2 + 3), fill=(0, 0, 0))
         d.text((8, 6), label, font=font, fill=(255, 255, 255))
-        grid.paste(img, ((i % 3) * (tw + pad), (i // 3) * (th + pad)))
+        grid.paste(img, ((i % cols) * (tw + pad), (i // cols) * (th + pad)))
     grid.save(out_png)
 
 
