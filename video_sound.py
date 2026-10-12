@@ -206,7 +206,12 @@ def main():
     vp.frame_grid(clip, grid)
     notes = audio_notes(clip, out / "original_audio.txt")
     account = original_account(out, grid, notes)
-    metrics = dict(METRICS) if has_music(notes) else {k: v for k, v in METRICS.items() if k != "music"}
+    if has_music(notes):
+        metrics = dict(METRICS)
+    else:  # no free 10 for "no music", but added music still costs points
+        metrics = {k: v for k, v in METRICS.items() if k != "music"}
+        metrics["sound_effects"] = (METRICS["sound_effects"] + "; the original has NO music, so any "
+                                    "music or extra sounds it lacks count against the recreation")
     print(f"original {w}x{h}\nAUDIO NOTES: {notes}\nJUDGE ACCOUNT: {account}\n"
           f"music metric: {'used' if 'music' in metrics else 'skipped (original has no music)'}\n")
 
