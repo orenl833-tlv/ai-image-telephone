@@ -26,9 +26,13 @@ VIDEO_MODELS = {  # model -> aspect ratios it accepts
     "bytedance/seedance-2.0-mini": ["1:1", "3:4", "9:16", "4:3", "16:9", "21:9", "9:21"],
     "alibaba/wan-3.0": ["16:9", "4:3", "1:1", "3:4", "9:16"],
 }
-AUDIO_MODEL = "google/gemini-3.8-flash"
+# Not from any describer's company. Tested: Voxtral transcribed well but looped when asked
+# for timestamps; Nemotron Omni said it could not hear; MiMo handled the full notes prompt.
+AUDIO_MODEL = "xiaomi/mimo-v2.6-flash"
 JUDGE = "anthropic/claude-opus-5.5"
 WORD_CAP, SOUND_CAP, MIN_WORDS = 95, 35, 30  # 60 picture + 35 sound
+PICTURE_WEIGHT, SOUND_WEIGHT = 0.6, 0.4
+SOUND_METRIC_WEIGHTS = {"speech": 1, "music": 1, "sound_effects": 1, "sync": 0.5}  # sync is rough
 # Never allowed in a description: the film's title, cast and character names.
 BANNED = ["six-gun rhythm", "six gun rhythm", "tex fletcher", "fletcher", "joan barclay",
           "ralph peters", "jim davis"]
@@ -51,6 +55,19 @@ def has_music(notes):
     return m is None
 
 
+def quoted_words(notes):
+    """Words inside quotation marks in audio notes, i.e. the transcribed speech."""
+    quotes = re.findall(r'["\u201c]([^"\u201d]+)["\u201d]', notes)
+    return [w for q in quotes for w in re.findall(r"[a-z']+", q.lower())]
+
+
+def speech_word_match(orig_notes, gen_notes):
+    """Share of the original's spoken words that also occur in the recreation (0-1).
+    Objective and repeatable; reported next to the judge's speech score."""
+    orig, gen = quoted_words(orig_notes), set(quoted_words(gen_notes))
+    return round(sum(w in gen for w in orig) / len(orig), 2) if orig else None
+
+
 def audio_notes(video, cache):
     """Soundtrack -> timestamped text notes, via a model that can hear."""
     if cache.exists():
@@ -69,8 +86,8 @@ def audio_notes(video, cache):
     )
     text = e.call(AUDIO_MODEL, [{"type": "text", "text": prompt},
                                 {"type": "input_audio",
-                                 "input_audio": {"data": data, "format": "wav"}}]
-                  )["content"].strip()
+                                 "input_audio": {"data": data, "format": "wav"}}],
+                  max_tokens=1500)["content"].strip()  # cap guards against looping output
     wav.unlink()
     cache.write_text(text)
     return text
@@ -104,7 +121,8 @@ def describe(model, grid, notes, duration):
         f"final part starting with 'Sound:' of at most {SOUND_CAP} words (dialogue, voices, "
         "music, effects). It will be compared with the original on: composition, color, "
         "lighting, figures, setting, style of the footage, the action, movement and camera "
-        "motion, order of events, speech, music, sound effects and sync. State the "
+        "motion, order of events, speech, music, sound effects and sync; picture counts 60% and "
+        "sound 40%. State the "
         "orientation, and say where each person stands in the frame (left, right, center, "
         "foreground or background). Do NOT name the film, actors, characters, songs or performers. Output "
         "only the description."
@@ -191,6 +209,17 @@ def judge(orig_grid, account, gen_grid, gen_notes, metrics):
     return json.loads(raw[raw.index("{"): raw.rindex("}") + 1])
 
 
+def weighted_scores(scores, metrics):
+    """Picture = mean of picture metrics; sound = weighted mean (sync counts half);
+    overall = 60% picture + 40% sound."""
+    pic = [k for k in vp.METRICS if k in metrics]
+    snd = {k: w for k, w in SOUND_METRIC_WEIGHTS.items() if k in metrics}
+    p = sum(scores[k]["score"] for k in pic) / len(pic)
+    so = sum(scores[k]["score"] * w for k, w in snd.items()) / sum(snd.values())
+    return {"mean_picture": round(p, 2), "mean_sound": round(so, 2),
+            "mean": round(PICTURE_WEIGHT * p + SOUND_WEIGHT * so, 2)}
+
+
 def main():
     src, start, duration, clip_id = Path(ARGS[0]), float(ARGS[1]), float(ARGS[2]), ARGS[3]
     out = e.HERE / "out" / "video_sound" / clip_id
@@ -249,14 +278,12 @@ def main():
         r["audio_notes"] = audio_notes(d / "video.mp4", d / "audio.txt")
         r["scores"] = judge(grid, account, d / "grid.png", r["audio_notes"], metrics)
         r["cost_usd"]["notes_and_judge"] = round(e.cost - t, 4)
-        r["mean_picture"] = round(sum(r["scores"][k]["score"] for k in vp.METRICS) / len(vp.METRICS), 2)
-        snd = [k for k in ("speech", "music", "sound_effects", "sync") if k in metrics]
-        r["mean_sound"] = round(sum(r["scores"][k]["score"] for k in snd) / len(snd), 2)
-        r["mean"] = round(sum(r["scores"][k]["score"] for k in metrics) / len(metrics), 2)
+        r["speech_word_match"] = speech_word_match(notes, r["audio_notes"])
+        r.update(weighted_scores(r["scores"], metrics))
         rp.write_text(json.dumps(r, indent=2))
         results.append(r)
         print(f"  {m} x {vm}: picture {r['mean_picture']} sound {r['mean_sound']} "
-              f"all {r['mean']}  ${r['cost_usd']}")
+              f"overall {r['mean']}  speech words {r['speech_word_match']}  ${r['cost_usd']}")
     (out / "summary.json").write_text(json.dumps(results, indent=2))
     print(f"\ntotal cost this run ${e.cost:.3f}")
 
