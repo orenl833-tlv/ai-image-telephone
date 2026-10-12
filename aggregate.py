@@ -33,9 +33,15 @@ def main(paintings, bench="bench"):
                 if "image" in r:
                     data[d][p] = r
 
+    # Rank only on paintings every describer finished, so a describer that failed
+    # on a hard painting can't raise its own average by skipping it.
+    common = [p for p in paintings if all(p in data[d] for d in DESCRIBERS)]
+    dropped = [p for p in paintings if p not in common]
+    if dropped:
+        print(f"Excluded from averages (some describer has no result): {', '.join(dropped)}\n")
+
     def overall(d):
-        runs = data[d].values()
-        return sum(r["image"]["mean"] for r in runs) / len(runs) if runs else 0
+        return sum(data[d][p]["image"]["mean"] for p in common) / len(common) if common else 0
 
     ranked = sorted(DESCRIBERS, key=lambda d: -overall(d))
 
@@ -49,8 +55,8 @@ def main(paintings, bench="bench"):
     print("\nAverage per metric across paintings")
     print(f"{'describer':30s}" + "".join(f"{s:>7s}" for s in SHORT))
     for d in ranked:
-        runs = list(data[d].values())
-        avgs = [sum(r["image"]["scores"][m]["score"] for r in runs) / len(runs) for m in METRICS]
+        runs = [data[d][p] for p in common]
+        avgs = [sum(r["image"]["scores"][m]["score"] for r in runs) / max(len(runs), 1) for m in METRICS]
         print(f"{d:30s}" + "".join(f"{a:7.2f}" for a in avgs))
 
     print("\nActual cost per describer, summed over these paintings")

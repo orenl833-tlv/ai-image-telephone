@@ -10,6 +10,7 @@ Usage: OPENROUTER_API_KEY=... python3 bench_one.py <painting_id> [--image-only] 
 --informed tells describers the grading criteria; results go to out/<painting>/bench_informed/.
 """
 import json
+import os
 import re
 import subprocess
 import sys
@@ -32,7 +33,8 @@ DESCRIBERS = [
 ]
 IMAGE_MODEL = "google/gemini-3.1-flash-lite-image"
 SVG_MODEL = "anthropic/claude-sonnet-5"
-CHROMIUM = "/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell"
+# Headless Chromium screenshots the SVG track; point CHROMIUM at any local Chrome/Chromium.
+CHROMIUM = os.environ.get("CHROMIUM", "chromium")
 SVG_METRICS = {k: v for k, v in e.METRICS.items() if k != "style_medium"}
 
 
