@@ -12,6 +12,7 @@ Usage: OPENROUTER_API_KEY=... python3 video_sound.py <film.mp4> <start_s> <durat
 import base64
 import itertools
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -27,7 +28,7 @@ VIDEO_MODELS = {  # model -> aspect ratios it accepts
 }
 AUDIO_MODEL = "google/gemini-3.8-flash"
 JUDGE = "anthropic/claude-opus-5.5"
-WORD_CAP, SOUND_CAP, MIN_WORDS = 85, 25, 30
+WORD_CAP, SOUND_CAP, MIN_WORDS = 95, 35, 30  # 60 picture + 35 sound
 # Never allowed in a description: the film's title, cast and character names.
 BANNED = ["six-gun rhythm", "six gun rhythm", "tex fletcher", "fletcher", "joan barclay",
           "ralph peters", "jim davis"]
@@ -40,6 +41,14 @@ METRICS.update({
     "sync": "sounds and speech line up with the picture (lips move when someone talks, "
             "sounds match visible actions)",
 })
+
+
+def has_music(notes):
+    """False when the audio notes say the original has no music. Then "no music" in a
+    recreation is not an achievement, so the music metric is left out instead of
+    handing every recreation a free 10."""
+    m = re.search(r"music[^a-z]*?(none|no music|not present|absent)", notes, re.I)
+    return m is None
 
 
 def audio_notes(video, cache):
@@ -96,7 +105,8 @@ def describe(model, grid, notes, duration):
         "music, effects). It will be compared with the original on: composition, color, "
         "lighting, figures, setting, style of the footage, the action, movement and camera "
         "motion, order of events, speech, music, sound effects and sync. State the "
-        "orientation. Do NOT name the film, actors, characters, songs or performers. Output "
+        "orientation, and say where each person stands in the frame (left, right, center, "
+        "foreground or background). Do NOT name the film, actors, characters, songs or performers. Output "
         "only the description."
     )
     feedback = ""
@@ -159,8 +169,8 @@ def original_account(out, grid, notes):
     return text
 
 
-def judge(orig_grid, account, gen_grid, gen_notes):
-    rubric = "\n".join(f'- "{k}": {v}' for k, v in METRICS.items())
+def judge(orig_grid, account, gen_grid, gen_notes, metrics):
+    rubric = "\n".join(f'- "{k}": {v}' for k, v in metrics.items())
     prompt = (
         f"Image 1 shows {vp.N_FRAMES} frames of an original movie clip; image 2 shows "
         f"{vp.N_FRAMES} frames, at the same relative times, of an attempt to recreate it from "
@@ -196,7 +206,9 @@ def main():
     vp.frame_grid(clip, grid)
     notes = audio_notes(clip, out / "original_audio.txt")
     account = original_account(out, grid, notes)
-    print(f"original {w}x{h}\nAUDIO NOTES: {notes}\nJUDGE ACCOUNT: {account}\n")
+    metrics = dict(METRICS) if has_music(notes) else {k: v for k, v in METRICS.items() if k != "music"}
+    print(f"original {w}x{h}\nAUDIO NOTES: {notes}\nJUDGE ACCOUNT: {account}\n"
+          f"music metric: {'used' if 'music' in metrics else 'skipped (original has no music)'}\n")
 
     descriptions = {}
     for m in DESCRIBERS:
@@ -230,12 +242,12 @@ def main():
         vp.frame_grid(d / "video.mp4", d / "grid.png")
         t = e.cost
         r["audio_notes"] = audio_notes(d / "video.mp4", d / "audio.txt")
-        r["scores"] = judge(grid, account, d / "grid.png", r["audio_notes"])
+        r["scores"] = judge(grid, account, d / "grid.png", r["audio_notes"], metrics)
         r["cost_usd"]["notes_and_judge"] = round(e.cost - t, 4)
         r["mean_picture"] = round(sum(r["scores"][k]["score"] for k in vp.METRICS) / len(vp.METRICS), 2)
-        snd = ["speech", "music", "sound_effects", "sync"]
+        snd = [k for k in ("speech", "music", "sound_effects", "sync") if k in metrics]
         r["mean_sound"] = round(sum(r["scores"][k]["score"] for k in snd) / len(snd), 2)
-        r["mean"] = round(sum(r["scores"][k]["score"] for k in METRICS) / len(METRICS), 2)
+        r["mean"] = round(sum(r["scores"][k]["score"] for k in metrics) / len(metrics), 2)
         rp.write_text(json.dumps(r, indent=2))
         results.append(r)
         print(f"  {m} x {vm}: picture {r['mean_picture']} sound {r['mean_sound']} "
