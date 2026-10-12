@@ -31,7 +31,6 @@ VIDEO_MODELS = {  # model -> aspect ratios it accepts
 AUDIO_MODEL = "xiaomi/mimo-v2.6-flash"
 JUDGE = "anthropic/claude-opus-5.5"
 WORD_CAP, SOUND_CAP, MIN_WORDS = 95, 35, 30  # 60 picture + 35 sound
-PICTURE_WEIGHT, SOUND_WEIGHT = 0.6, 0.4
 SOUND_METRIC_WEIGHTS = {"speech": 1, "music": 1, "sound_effects": 1, "sync": 0.5}  # sync is rough
 # Never allowed in a description: the film's title, cast and character names.
 BANNED = ["six-gun rhythm", "six gun rhythm", "tex fletcher", "fletcher", "joan barclay",
@@ -121,8 +120,8 @@ def describe(model, grid, notes, duration):
         f"final part starting with 'Sound:' of at most {SOUND_CAP} words (dialogue, voices, "
         "music, effects). It will be compared with the original on: composition, color, "
         "lighting, figures, setting, style of the footage, the action, movement and camera "
-        "motion, order of events, speech, music, sound effects and sync; picture counts 60% and "
-        "sound 40%. State the "
+        "motion, order of events, speech, music, sound effects and sync; sound counts for up "
+        "to 40% depending on how much speech and music the clip has. State the "
         "orientation, and say where each person stands in the frame (left, right, center, "
         "foreground or background). Do NOT name the film, actors, characters, songs or performers. Output "
         "only the description."
@@ -171,20 +170,34 @@ def _generate(model, prompt, duration, aspect, out_mp4, extra):
     return c
 
 
+SOUND_WEIGHT_RULES = (
+    "Decide how much the soundtrack should count in this clip's grade (sound_weight, from 0 "
+    "to 0.40; the picture gets the rest). Rules: speech AND music -> 0.40; only speech or "
+    "only music -> 0.25; silent (no speech, no music; hiss or room tone only) -> 0. If there "
+    "is very little speech or music (a word or two, a few faint notes), or only sound "
+    "effects, lower the weight below the matching rule by as much as you think is fair."
+)
+
+
 def original_account(out, grid, notes):
-    cache = out / "original_account.txt"
+    """The judge's account of the original plus the clip's sound weight, decided once per
+    clip from the original so every recreation of it is weighed the same way."""
+    cache = out / "original_account.json"
     if cache.exists():
-        return cache.read_text()
+        return json.loads(cache.read_text())
     prompt = (
         f"These are {vp.N_FRAMES} frames of a movie clip (left to right, top row then bottom "
         "row, each labeled with number and time), followed by notes on its soundtrack.\n\n"
-        f"Soundtrack notes:\n{notes}\n\nIn 4-5 sentences write down what happens: "
-        f"{vp.EVENTS_INSTRUCTIONS}; and what is heard and when. Output only the account."
+        f"Soundtrack notes:\n{notes}\n\n1) In 4-5 sentences write down what happens: "
+        f"{vp.EVENTS_INSTRUCTIONS}; and what is heard and when.\n2) {SOUND_WEIGHT_RULES}\n\n"
+        'Reply with JSON only: {"account": "...", "sound_weight": <0-0.40>, '
+        '"sound_weight_reason": "<one sentence>"}'
     )
-    text = e.call(JUDGE, [{"type": "text", "text": prompt}, e.image_part(grid)]
-                  )["content"].strip()
-    cache.write_text(text)
-    return text
+    raw = e.call(JUDGE, [{"type": "text", "text": prompt}, e.image_part(grid)])["content"]
+    res = json.loads(raw[raw.index("{"): raw.rindex("}") + 1])
+    res["sound_weight"] = max(0.0, min(0.40, float(res["sound_weight"])))
+    cache.write_text(json.dumps(res, indent=2))
+    return res
 
 
 def judge(orig_grid, account, gen_grid, gen_notes, metrics):
@@ -209,15 +222,19 @@ def judge(orig_grid, account, gen_grid, gen_notes, metrics):
     return json.loads(raw[raw.index("{"): raw.rindex("}") + 1])
 
 
-def weighted_scores(scores, metrics):
+def weighted_scores(scores, metrics, sound_weight):
     """Picture = mean of picture metrics; sound = weighted mean (sync counts half);
-    overall = 60% picture + 40% sound."""
+    overall = (1 - sound_weight) * picture + sound_weight * sound."""
     pic = [k for k in vp.METRICS if k in metrics]
     snd = {k: w for k, w in SOUND_METRIC_WEIGHTS.items() if k in metrics}
     p = sum(scores[k]["score"] for k in pic) / len(pic)
-    so = sum(scores[k]["score"] * w for k, w in snd.items()) / sum(snd.values())
-    return {"mean_picture": round(p, 2), "mean_sound": round(so, 2),
-            "mean": round(PICTURE_WEIGHT * p + SOUND_WEIGHT * so, 2)}
+    out = {"mean_picture": round(p, 2), "sound_weight": sound_weight}
+    if snd and sound_weight > 0:
+        so = sum(scores[k]["score"] * w for k, w in snd.items()) / sum(snd.values())
+        out.update(mean_sound=round(so, 2), mean=round((1 - sound_weight) * p + sound_weight * so, 2))
+    else:
+        out.update(mean_sound=None, mean=round(p, 2))
+    return out
 
 
 def main():
@@ -234,15 +251,19 @@ def main():
     grid = out / "original_grid.png"
     vp.frame_grid(clip, grid)
     notes = audio_notes(clip, out / "original_audio.txt")
-    account = original_account(out, grid, notes)
-    if has_music(notes):
+    acc = original_account(out, grid, notes)
+    account, sound_weight = acc["account"], acc["sound_weight"]
+    if sound_weight == 0:  # silent clip: grade the picture only
+        metrics = dict(vp.METRICS)
+    elif has_music(notes):
         metrics = dict(METRICS)
     else:  # no free 10 for "no music", but added music still costs points
         metrics = {k: v for k, v in METRICS.items() if k != "music"}
         metrics["sound_effects"] = (METRICS["sound_effects"] + "; the original has NO music, so any "
                                     "music or extra sounds it lacks count against the recreation")
     print(f"original {w}x{h}\nAUDIO NOTES: {notes}\nJUDGE ACCOUNT: {account}\n"
-          f"music metric: {'used' if 'music' in metrics else 'skipped (original has no music)'}\n")
+          f"sound weight {sound_weight:.0%} ({acc.get('sound_weight_reason')}); "
+          f"music metric: {'used' if 'music' in metrics else 'skipped'}\n")
 
     descriptions = {}
     for m in DESCRIBERS:
@@ -279,7 +300,7 @@ def main():
         r["scores"] = judge(grid, account, d / "grid.png", r["audio_notes"], metrics)
         r["cost_usd"]["notes_and_judge"] = round(e.cost - t, 4)
         r["speech_word_match"] = speech_word_match(notes, r["audio_notes"])
-        r.update(weighted_scores(r["scores"], metrics))
+        r.update(weighted_scores(r["scores"], metrics, sound_weight))
         rp.write_text(json.dumps(r, indent=2))
         results.append(r)
         print(f"  {m} x {vm}: picture {r['mean_picture']} sound {r['mean_sound']} "
