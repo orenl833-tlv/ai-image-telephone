@@ -19,6 +19,7 @@ import base64
 import itertools
 import json
 import re
+import shutil
 import sys
 import zlib
 from pathlib import Path
@@ -106,7 +107,10 @@ def audio_notes(video, cache):
     if cache.exists() and not looks_like_refusal(cache.read_text()):
         return cache.read_text()
     wav = cache.with_suffix(".wav")
-    vp.ff("-i", str(video), "-vn", "-ac", "1", "-ar", "16000", str(wav))
+    # Old prints are often quiet (mary_lamb peaks at -20 dB) and MiMo then reports no audio,
+    # so normalize loudness first.
+    vp.ff("-i", str(video), "-vn", "-af", "loudnorm=I=-16:TP=-1.5", "-ac", "1", "-ar", "16000",
+          str(wav))
     data = base64.b64encode(wav.read_bytes()).decode()
     prompt = (
         "Listen to this short soundtrack and write notes for someone who cannot hear it. "
@@ -362,9 +366,19 @@ def main():
     descriptions = {}
     for m in sorted({m for m, _ in pairs}):
         f = out / f"desc_{m.replace('/', '_')}.txt"
+        used = f.with_suffix(".notes")  # the audio notes this description was written from
+        if f.exists() and used.exists() and used.read_text() != notes:
+            # Notes changed, so the description and anything made from it are stale.
+            print(f"[{m}] audio notes changed; redoing description and videos")
+            f.unlink()
+            (out / "stale").mkdir(exist_ok=True)
+            for d in out.glob(f"{m.replace('/', '_')}__*"):
+                shutil.rmtree(out / "stale" / d.name, ignore_errors=True)
+                d.rename(out / "stale" / d.name)
         if not f.exists():
             t = e.cost
             f.write_text(describe(m, grid, notes, duration))
+            used.write_text(notes)
             (out / f"desc_{m.replace('/', '_')}.cost").write_text(str(e.cost - t))
         descriptions[m] = f.read_text()
         print(f"[{m}] {descriptions[m]}\n")
