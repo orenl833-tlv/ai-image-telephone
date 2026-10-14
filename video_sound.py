@@ -12,8 +12,10 @@ and 12 frames and MiMo Pro: it alone caught near-still video and missing lip syn
 can't be misled by a wrong transcript). It never sees the descriptions. A check judge
 (Opus on 12 labeled frames + audio notes) re-grades a fixed ~20% sample.
 
-Usage: OPENROUTER_API_KEY=... python3 video_sound.py <film.mp4> <start_s> <duration_s> <clip_id> [--regrade]
+Usage: OPENROUTER_API_KEY=... python3 video_sound.py <film.mp4> <start_s> <duration_s> <clip_id> [--regrade] [--no-crop]
 --regrade re-grades the videos already on disk (no new descriptions or video spend).
+--no-crop keeps the full frame (cropdetect misreads clips with long dark stretches).
+Each describer is also asked, separately, whether it recognizes the film (result "recognized").
 """
 import base64
 import itertools
@@ -55,10 +57,17 @@ BANNED_BY_CLIP = {
     # Team names stay allowed: the commentator says one, so quoting the speech needs it, and
     # an obscure school game gives a model nothing famous to recognize.
     "bball_hs": [],
+    "fight_club": ["fight club", "tyler", "durden", "marla", "edward norton", "norton",
+                   "brad pitt", "helena bonham carter", "fincher", "project mayhem",
+                   "where is my mind", "pixies", "palahniuk"],
 }
 BANNED = []  # set from BANNED_BY_CLIP in main()
 
 METRICS = dict(vp.METRICS)
+METRICS["motion_camera"] += "; cuts between shots and what each shot shows"
+METRICS["event_order"] += ", including when each cut happens"
+# Said to the judge wherever it writes down what happens, so cuts are never glossed over.
+EVENTS = vp.EVENTS_INSTRUCTIONS + ", and every cut to a new shot (when, and what it shows)"
 METRICS.update({
     "speech": "what is said (content), by what kind of voice (man/woman, tone)",
     "music": "presence, genre, tempo, mood and instruments of any music",
@@ -170,7 +179,8 @@ def describe(model, grid, notes, duration):
         "motion, order of events, speech, music, sound effects and sync; sound counts for up "
         "to 40% depending on how much speech and music the clip has. State the "
         "orientation, and say where each person stands in the frame (left, right, center, "
-        "foreground or background). Do NOT name the film, actors, characters, songs or performers. Output "
+        "foreground or background). If the shot changes, say at what second it cuts and "
+        "what the new shot shows. Do NOT name the film, actors, characters, songs or performers. Output "
         "only the description."
     )
     feedback = ""
@@ -183,6 +193,15 @@ def describe(model, grid, notes, duration):
         print(f"  [{model}] rejected: {'; '.join(problems)}")
         feedback = f"\n\nPrevious attempt rejected ({'; '.join(problems)}): {text!r}. Fix it."
     raise RuntimeError(f"{model} kept failing the checks")
+
+
+def recognized(model, grid, notes):
+    """Asked after the description, in a separate call: does the describer know the film?
+    The answer is only recorded; a describer that knows it may have described from memory."""
+    prompt = ("These frames and soundtrack notes are from a movie clip.\n\nSoundtrack notes:\n"
+              f"{notes}\n\nDo you recognize the film? Reply with only its title, or 'unknown'.")
+    return e.call(model, [{"type": "text", "text": prompt},
+                          e.image_part(grid)])["content"].strip()[:200]
 
 
 def _generate(model, prompt, duration, aspect, out_mp4, extra):
@@ -243,7 +262,7 @@ def original_account(out, clip):
         return json.loads(cache.read_text())
     prompt = (
         "Watch and listen to this movie clip.\n1) In 4-5 sentences write down what happens: "
-        f"{vp.EVENTS_INSTRUCTIONS}; and what is heard and when (quote speech exactly).\n"
+        f"{EVENTS}; and what is heard and when (quote speech exactly).\n"
         f"2) {SOUND_WEIGHT_RULES}\n\n"
         'Reply with JSON only: {"account": "...", "sound_weight": <0-0.40>, '
         '"sound_weight_reason": "<one sentence>"}'
@@ -258,7 +277,7 @@ def original_account(out, clip):
 def grading_task(metrics):
     rubric = "\n".join(f'- "{k}": {v}' for k, v in metrics.items())
     return (
-        f"First write down what happens in the recreation: {vp.EVENTS_INSTRUCTIONS}; and what "
+        f"First write down what happens in the recreation: {EVENTS}; and what "
         "is heard. Then score how closely the recreation matches the original on each "
         "metric, 0-10 (10 = indistinguishable, 5 = same idea with clear differences, 0 = "
         "unrelated or missing). Judge timing loosely but order of events strictly. Be "
@@ -326,14 +345,15 @@ def weighted_scores(scores, metrics, sound_weight):
 
 def main():
     regrade = "--regrade" in ARGS
-    args = [a for a in ARGS if a != "--regrade"]
+    no_crop = "--no-crop" in ARGS  # cropdetect misreads clips with long dark stretches
+    args = [a for a in ARGS if a not in ("--regrade", "--no-crop")]
     src, start, duration, clip_id = Path(args[0]), float(args[1]), float(args[2]), args[3]
     BANNED[:] = BANNED_BY_CLIP.get(clip_id, [])
     out = e.HERE / "out" / "video_sound" / clip_id
     out.mkdir(parents=True, exist_ok=True)
     clip = out / "original.mp4"
     if not clip.exists():
-        crop = vp.detect_crop(src, start, duration)
+        crop = None if no_crop else vp.detect_crop(src, start, duration)
         vp.ff("-ss", str(start), "-t", str(duration), "-i", str(src),
               *(["-vf", f"crop={crop}"] if crop else []), "-c:v", "libx264",
               "-pix_fmt", "yuv420p", "-c:a", "aac", str(clip))
@@ -363,7 +383,7 @@ def main():
     else:
         pairs = list(itertools.product(DESCRIBERS, VIDEO_MODELS))
 
-    descriptions = {}
+    descriptions, recog = {}, {}
     for m in sorted({m for m, _ in pairs}):
         f = out / f"desc_{m.replace('/', '_')}.txt"
         used = f.with_suffix(".notes")  # the audio notes this description was written from
@@ -381,6 +401,10 @@ def main():
             used.write_text(notes)
             (out / f"desc_{m.replace('/', '_')}.cost").write_text(str(e.cost - t))
         descriptions[m] = f.read_text()
+        rf = f.with_suffix(".recognized")
+        if not rf.exists():
+            rf.write_text(recognized(m, grid, notes))
+        recog[m] = rf.read_text()
         print(f"[{m}] {descriptions[m]}\n")
 
     results = []
@@ -424,6 +448,7 @@ def main():
             r["check"] = {"judge": CHECK_JUDGE, "scores": chk,
                           **weighted_scores(chk, metrics, sound_weight)}
             r["cost_usd"]["check_judge"] = round(e.cost - t, 4)
+        r["recognized"] = recog.get(m)
         r["speech_word_match"] = speech_word_match(notes, r["audio_notes"])
         r.update(weighted_scores(r["scores"], metrics, sound_weight))
         rp.write_text(json.dumps(r, indent=2))
