@@ -88,9 +88,22 @@ def speech_word_match(orig_notes, gen_notes):
     return round(sum(w in gen for w in orig) / len(orig), 2) if orig else None
 
 
+REFUSAL_HINTS = ("unable to", "can't hear", "cannot hear", "no audio", "not attached",
+                 "wasn't attached", "was not attached", "re-upload", "please upload",
+                 "don't have access to the audio", "no audio file")
+
+
+def looks_like_refusal(text):
+    """True when the audio model says it got no audio instead of describing it. Seen once
+    with MiMo on a clip it had described correctly minutes earlier; such notes would leave
+    every describer guessing about the sound, so they must never be used."""
+    head = text.lower()[:300]
+    return any(h in head for h in REFUSAL_HINTS)
+
+
 def audio_notes(video, cache):
     """Soundtrack -> timestamped text notes, via a model that can hear."""
-    if cache.exists():
+    if cache.exists() and not looks_like_refusal(cache.read_text()):
         return cache.read_text()
     wav = cache.with_suffix(".wav")
     vp.ff("-i", str(video), "-vn", "-ac", "1", "-ar", "16000", str(wav))
@@ -104,10 +117,17 @@ def audio_notes(video, cache):
         "4) If the track is silent, say 'silent'. Do not name or guess any film, song, "
         "performer or character. Plain text, at most 120 words."
     )
-    text = e.call(AUDIO_MODEL, [{"type": "text", "text": prompt},
-                                {"type": "input_audio",
-                                 "input_audio": {"data": data, "format": "wav"}}],
-                  max_tokens=1500)["content"].strip()  # cap guards against looping output
+    for attempt in range(4):
+        text = e.call(AUDIO_MODEL, [{"type": "text", "text": prompt},
+                                    {"type": "input_audio",
+                                     "input_audio": {"data": data, "format": "wav"}}],
+                      max_tokens=1500)["content"].strip()  # cap guards against looping output
+        if not looks_like_refusal(text):
+            break
+        print(f"  [audio notes] model claimed it got no audio (try {attempt + 1}), retrying")
+    else:
+        wav.unlink()
+        raise RuntimeError(f"audio notes failed for {video}: {text[:200]!r}")
     wav.unlink()
     cache.write_text(text)
     return text
