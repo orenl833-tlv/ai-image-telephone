@@ -11,6 +11,7 @@ import json
 import os
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -73,11 +74,17 @@ def call(model, content, **extra):
         API, data=json.dumps(body).encode(),
         headers={"Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}",
                  "Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=300) as r:
-            resp = json.load(r)
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(f"{model}: HTTP {e.code}: {e.read().decode()[:500]}") from None
+    for attempt in range(5):  # retry temporary errors: rate limits and server hiccups
+        try:
+            with urllib.request.urlopen(req, timeout=300) as r:
+                resp = json.load(r)
+            break
+        except urllib.error.HTTPError as e:
+            body = e.read().decode()[:500]
+            if e.code in (429, 500, 502, 503, 504) and attempt < 4:
+                time.sleep(10 * (attempt + 1))
+                continue
+            raise RuntimeError(f"{model}: HTTP {e.code}: {body}") from None
     c = resp.get("usage", {}).get("cost", 0) or 0
     with _lock:
         cost += c

@@ -361,10 +361,13 @@ def main():
             aspect = min(VIDEO_MODELS[vm],
                          key=lambda a: abs(int(a.split(":")[0]) / int(a.split(":")[1]) - w / h))
             r = {"describer": m, "video_model": vm, "aspect": aspect, "cost_usd": {}}
-            try:
+            if (d / "video.mp4").exists():  # paid for in an interrupted run; don't buy it twice
+                r["cost_usd"]["video"] = None
+            else:
+              try:
                 r["cost_usd"]["video"] = round(_generate(vm, descriptions[m], duration, aspect,
                                                          d / "video.mp4", {"generate_audio": True}), 4)
-            except RuntimeError as err:
+              except RuntimeError as err:
                 print(f"  FAILED {vm}: {err}")
                 r["error"] = str(err)
                 rp.write_text(json.dumps(r, indent=2))
@@ -377,6 +380,7 @@ def main():
         r["judge"] = JUDGE
         r["scores"] = judge(clip, account, d / "video.mp4", metrics)
         r["cost_usd"]["notes_and_judge"] = round(e.cost - t, 4)
+        r["cost_usd"] = {k: v for k, v in r["cost_usd"].items() if v is not None}
         if in_check_sample(clip_id, m):
             t = e.cost
             chk = check_judge(out, clip, account, d / "video.mp4", r["audio_notes"], notes, metrics)
