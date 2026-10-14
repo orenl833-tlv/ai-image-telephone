@@ -49,6 +49,7 @@ SOUND_METRIC_WEIGHTS = {"speech": 1, "music": 1, "sound_effects": 1, "sync": 0.5
 BANNED_BY_CLIP = {
     "sixgun_siblings": ["six-gun rhythm", "six gun rhythm", "tex fletcher", "fletcher",
                         "joan barclay", "ralph peters", "jim davis"],
+    "mary_lamb": ["mary learns her traffic lesson", "traffic lesson"],
     "cartoon_fox": ["foxed by a fox", "terrytoons", "terry toons", "paul terry"],
     # Team names stay allowed: the commentator says one, so quoting the speech needs it, and
     # an obscure school game gives a model nothing famous to recognize.
