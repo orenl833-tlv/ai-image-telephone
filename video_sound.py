@@ -50,7 +50,9 @@ BANNED_BY_CLIP = {
     "sixgun_siblings": ["six-gun rhythm", "six gun rhythm", "tex fletcher", "fletcher",
                         "joan barclay", "ralph peters", "jim davis"],
     "cartoon_fox": ["foxed by a fox", "terrytoons", "terry toons", "paul terry"],
-    "bball_hs": ["belmont", "beaumont", "arlington", "marauders", "miaa"],
+    # Team names stay allowed: the commentator says one, so quoting the speech needs it, and
+    # an obscure school game gives a model nothing famous to recognize.
+    "bball_hs": [],
 }
 BANNED = []  # set from BANNED_BY_CLIP in main()
 
