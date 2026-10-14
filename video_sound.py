@@ -2,10 +2,10 @@
 generated clip (with audio) -> grade on picture and sound.
 
 Picture: every describer and the judge see the same labeled 6-frame grid (video_pilot).
-Sound: an audio model turns each soundtrack (original and generated) into the same kind
-of notes - timestamped transcript, music, sound effects - so describers and the judge,
-who can't hear, all work from text. The judge writes its account of the original once
-and grades every recreation against it.
+Sound: Gemini 3.1 Pro (also the judge) turns each soundtrack (original and generated) into
+the same kind of notes - timestamped transcript, music, sound effects - which is all the
+describers learn about the sound. The judge writes its account of the original once and
+grades every recreation against it.
 
 Judge: Gemini 3.1 Pro watches and hears both videos directly (tested against Opus on 6
 and 12 frames and MiMo Pro: it alone caught near-still video and missing lip sync, and it
@@ -22,6 +22,7 @@ import itertools
 import json
 import re
 import shutil
+import subprocess
 import sys
 import zlib
 from pathlib import Path
@@ -40,10 +41,11 @@ DESCRIBERS = [
 ]
 # Chosen after testing Grok Imagine Lite, Seedance 2.0 Mini and Wan 3.0 on the same clip.
 VIDEO_MODELS = {"alibaba/wan-3.0": ["16:9", "4:3", "1:1", "3:4", "9:16"]}  # -> accepted aspects
-# Not from any describer's company. Tested: Voxtral transcribed well but looped when asked
-# for timestamps; Nemotron Omni said it could not hear; MiMo handled the full notes prompt.
-AUDIO_MODEL = "xiaomi/mimo-v2.6-flash"
 JUDGE = "google/gemini-3.1-pro-preview"
+# Writes the audio notes too. Earlier MiMo v2.6 Flash claimed a quiet clip had no audio and
+# called a rock song "electronic dance-pop"; the notes are all describers know of the sound.
+AUDIO_MODEL = JUDGE
+SILENT_DB = -50  # peak below this counts as silent; normalizing would only amplify hiss
 CHECK_JUDGE = "anthropic/claude-opus-5.5"
 CHECK_PERCENT = 20
 WORD_CAP, SOUND_CAP, MIN_WORDS = 95, 35, 30  # 60 picture + 35 sound
@@ -111,12 +113,23 @@ def looks_like_refusal(text):
     return any(h in head for h in REFUSAL_HINTS)
 
 
+def max_volume(video):
+    """Peak level of the soundtrack in dB (-inf-ish when there is no audio stream)."""
+    out = subprocess.run([vp.FF, "-i", str(video), "-vn", "-af", "volumedetect", "-f", "null",
+                          "-"], capture_output=True, text=True).stderr
+    m = re.search(r"max_volume: (-?[\d.]+) dB", out)
+    return float(m.group(1)) if m else -999.0
+
+
 def audio_notes(video, cache):
     """Soundtrack -> timestamped text notes, via a model that can hear."""
     if cache.exists() and not looks_like_refusal(cache.read_text()):
         return cache.read_text()
+    if max_volume(video) < SILENT_DB:
+        cache.write_text("silent")
+        return "silent"
     wav = cache.with_suffix(".wav")
-    # Old prints are often quiet (mary_lamb peaks at -20 dB) and MiMo then reports no audio,
+    # Old prints are often quiet (mary_lamb peaks at -20 dB) and MiMo reported no audio,
     # so normalize loudness first.
     vp.ff("-i", str(video), "-vn", "-af", "loudnorm=I=-16:TP=-1.5", "-ac", "1", "-ar", "16000",
           str(wav))
@@ -134,7 +147,7 @@ def audio_notes(video, cache):
         text = e.call(AUDIO_MODEL, [{"type": "text", "text": prompt},
                                     {"type": "input_audio",
                                      "input_audio": {"data": data, "format": "wav"}}],
-                      max_tokens=1500)["content"].strip()  # cap guards against looping output
+                      max_tokens=6000)["content"].strip()  # room for thinking, caps loops
         if not looks_like_refusal(text):
             break
         print(f"  [audio notes] model claimed it got no audio (try {attempt + 1}), retrying")
@@ -435,7 +448,7 @@ def main():
                 results.append(r)
                 continue
         vp.frame_grid(d / "video.mp4", d / "grid.png")
-        (d / "audio.txt").unlink(missing_ok=True) if regrade else None  # re-hear with MiMo
+        (d / "audio.txt").unlink(missing_ok=True) if regrade else None  # re-hear it
         t = e.cost
         r["audio_notes"] = audio_notes(d / "video.mp4", d / "audio.txt")
         r["judge"] = JUDGE
