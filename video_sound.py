@@ -45,9 +45,14 @@ CHECK_JUDGE = "anthropic/claude-opus-5.5"
 CHECK_PERCENT = 20
 WORD_CAP, SOUND_CAP, MIN_WORDS = 95, 35, 30  # 60 picture + 35 sound
 SOUND_METRIC_WEIGHTS = {"speech": 1, "music": 1, "sound_effects": 1, "sync": 0.5}  # sync is rough
-# Never allowed in a description: the film's title, cast and character names.
-BANNED = ["six-gun rhythm", "six gun rhythm", "tex fletcher", "fletcher", "joan barclay",
-          "ralph peters", "jim davis"]
+# Never allowed in a description: titles, cast, character and team names, per clip.
+BANNED_BY_CLIP = {
+    "sixgun_siblings": ["six-gun rhythm", "six gun rhythm", "tex fletcher", "fletcher",
+                        "joan barclay", "ralph peters", "jim davis"],
+    "cartoon_fox": ["foxed by a fox", "terrytoons", "terry toons", "paul terry"],
+    "bball_hs": ["belmont", "beaumont", "arlington", "marauders", "miaa"],
+}
+BANNED = []  # set from BANNED_BY_CLIP in main()
 
 METRICS = dict(vp.METRICS)
 METRICS.update({
@@ -294,6 +299,7 @@ def main():
     regrade = "--regrade" in ARGS
     args = [a for a in ARGS if a != "--regrade"]
     src, start, duration, clip_id = Path(args[0]), float(args[1]), float(args[2]), args[3]
+    BANNED[:] = BANNED_BY_CLIP.get(clip_id, [])
     out = e.HERE / "out" / "video_sound" / clip_id
     out.mkdir(parents=True, exist_ok=True)
     clip = out / "original.mp4"
