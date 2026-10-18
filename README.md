@@ -1,4 +1,8 @@
-# Image Telephone: how well can AI describe an image or a video in words?
+# Lossy Compression by Text: how well can AI describe an image or a video in words?
+
+A painting or a video clip is squeezed into a short text, then rebuilt from
+that text alone. How close the rebuild gets shows how much the description
+kept.
 
 Two benchmarks for vision-language models: [paintings](#paintings) and
 [video clips with sound](#video-clips-with-sound).
